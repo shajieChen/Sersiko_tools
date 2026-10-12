@@ -9,6 +9,8 @@ SetGameDir.bat
 
 Preview.bat
   打开预览。页面在本目录，模型读资源目录里的 preview，动画读 unpacked。
+  角色页的「导出 glTF」把当前模型和动画写成一个带骨架的 .glb，放到本目录的 output。
+  output 里的文件已被 .gitignore 排除，不会进 git。
 
 Extract.bat
   从游戏目录抽取 Data2、Data3、Data4 到资源目录。

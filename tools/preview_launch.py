@@ -19,6 +19,47 @@ def first_free_port(start, count=20):
     return None
 
 
+
+def is_preview_server_command(command, tool):
+    if not command:
+        return False
+    folded = os.path.normcase(command.replace("/", os.sep))
+    server = os.path.normcase(os.path.normpath(os.path.join(tool, "preview", "server.py")))
+    relative = os.path.normcase(os.path.join("preview", "server.py"))
+    return server in folded or relative in folded
+
+
+def stop_preview_servers(processes, tool, kill):
+    for pid, command in processes:
+        if is_preview_server_command(command, tool):
+            kill(pid)
+
+
+def list_preview_processes():
+    completed = subprocess.run(
+        [
+            "powershell", "-NoProfile", "-Command",
+            "Get-CimInstance Win32_Process -Filter \"Name = 'python.exe' OR Name = 'pythonw.exe'\" | ForEach-Object { $_.ProcessId.ToString() + [char]9 + $_.CommandLine }",
+        ],
+        capture_output=True, text=True, encoding="utf-8", errors="replace",
+    )
+    processes = []
+    for line in completed.stdout.splitlines():
+        pid, sep, command = line.partition(chr(9))
+        if sep and pid.strip().isdigit():
+            processes.append((int(pid.strip()), command))
+    return processes
+
+
+def kill_pid(pid):
+    subprocess.run(
+        ["taskkill", "/PID", str(pid), "/F"],
+        check=False,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+    )
+
+
 def ensure_built():
     projects = [
         (os.path.join(TOOL, "tools", "RigDump", "RigDump.csproj"), os.path.join(TOOL, "tools", "RigDump", "bin", "Release", "net10.0", "RigDump.exe")),
@@ -32,6 +73,7 @@ def ensure_built():
 
 
 def main():
+    stop_preview_servers(list_preview_processes(), TOOL, kill_pid)
     port = first_free_port(8765)
     if port is None:
         print("从 8765 开始的端口都已被占用。")

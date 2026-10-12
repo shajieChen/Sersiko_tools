@@ -19,6 +19,10 @@ model-viewer { width: 100%; flex: 1; min-height: 280px; background: #1c1a17; }
 #tabs button { min-width: 88px; cursor: pointer; }
 #tabs button.on { background: #8c6a3a; border-color: #d9c7a2; }
 .hidden { display: none !important; }
+#exportCategory { background: #2a2622; color: #f2efe8; border: 1px solid #5c5348; border-radius: 8px; padding: 16px; max-width: 440px; }
+#exportCategory::backdrop { background: rgba(0, 0, 0, 0.45); }
+#exportCategory p { margin: 0 0 14px; line-height: 1.5; }
+#exportCategory form div { display: flex; gap: 8px; justify-content: flex-end; }
 </style>
 </head>
 <body>
@@ -36,8 +40,19 @@ model-viewer { width: 100%; flex: 1; min-height: 280px; background: #1c1a17; }
   <label class="chr-only">动画<input id="animQuery" placeholder="过滤动作名"></label>
   <label class="chr-only">选择动画<select id="anims" size="8"></select></label>
   <button id="play" type="button" class="chr-only">播放</button>
+  <button id="exportGlb" type="button" class="chr-only">导出 glTF</button>
 </header>
 <div id="status"></div>
+<dialog id="exportCategory">
+  <form method="dialog">
+    <p id="exportCategoryText"></p>
+    <div>
+      <button type="submit" value="batch">导出这一批</button>
+      <button type="submit" value="one">只导出当前一条</button>
+      <button type="submit" value="cancel">取消</button>
+    </div>
+  </form>
+</dialog>
 <model-viewer id="view" camera-controls autoplay animation-name="clip" exposure="1.15" shadow-intensity="0.4"></model-viewer>
 <script>
 const status = document.getElementById("status");
@@ -186,7 +201,16 @@ let modelRows = [];
 let modelRequest = 0;
 const tierLabels = { std: "\u6807\u51c6", lod: "\u4f4e\u6a21", menu: "\u83dc\u5355" };
 
+function clearViewer() {
+  if (view.objectUrl) {
+    URL.revokeObjectURL(view.objectUrl);
+    view.objectUrl = "";
+  }
+  view.src = "";
+}
+
 function setTab(tab) {
+  const restoreCharacter = pageTab === "item" && tab === "chr";
   pageTab = tab;
   document.getElementById("tabChr").classList.toggle("on", tab === "chr");
   document.getElementById("tabItem").classList.toggle("on", tab === "item");
@@ -195,7 +219,10 @@ function setTab(tab) {
   document.getElementById("modelQuery").placeholder = tab === "item"
     ? "\u641c\u7d22\u6954\u4e38\u3001\u624b\u91cc\u5251\u3001wp_a_0300"
     : "\u7559\u7a7a\u5217\u51fa\u89d2\u8272\uff0c\u641c\u7d22 c0000 \u770b\u4e3b\u89d2\uff0c\u6216\u641c\u7d22 parts";
-  loadModels();
+  if (restoreCharacter) clearViewer();
+  loadModels().then(() => {
+    if (restoreCharacter && pageTab === "chr" && anims.value) play();
+  });
 }
 
 function fillTiers() {
@@ -220,7 +247,7 @@ function showItem() {
   status.textContent = "\u9053\u5177 " + models.selectedOptions[0].textContent;
 }
 
-function renderModelOptions() {
+async function renderModelOptions() {
   const tier = document.getElementById("itemTier").value;
   const list = pageTab === "item" ? modelRows.filter((item) => item.tier === tier) : modelRows;
   const previous = models.value;
@@ -238,7 +265,7 @@ function renderModelOptions() {
     else status.textContent = "\u6ca1\u6709\u5339\u914d\u7684\u9053\u5177";
     return;
   }
-  if (list.length) loadAnims();
+  if (list.length) await loadAnims();
   else status.textContent = "\u6ca1\u6709\u5339\u914d\u7684\u6a21\u578b";
 }
 
@@ -251,7 +278,7 @@ async function loadModels() {
   if (request !== modelRequest || tab !== pageTab) return;
   modelRows = rows;
   if (pageTab === "item") fillTiers();
-  renderModelOptions();
+  await renderModelOptions();
 }
 
 async function loadAnims() {
@@ -279,6 +306,7 @@ async function play() {
   const held = model.indexOf("c0000") >= 0 ? "&weapon=" + encodeURIComponent(weapon) : "";
   const src = "/api/clip.glb?model=" + encodeURIComponent(model) + "&anim=" + encodeURIComponent(anim) + held;
   const response = await fetch(src);
+  if (pageTab !== "chr") return;
   if (!response.ok) {
     status.textContent = "播放失败" + (await response.text());
     return;
@@ -314,7 +342,92 @@ function onGroupChange() {
 groupSelect.addEventListener("change", onGroupChange);
 detailSelect.addEventListener("change", renderAnims);
 document.getElementById("animQuery").addEventListener("input", renderAnims);
+async function exportGlb() {
+  const model = models.value;
+  const anim = anims.value;
+  if (!model || !anim) {
+    status.textContent = "先选择模型和动画";
+    return;
+  }
+  if (anim.toLowerCase().endsWith("/skeleton.hkx")) {
+    status.textContent = "skeleton 是绑定骨骼，不是动作";
+    return;
+  }
+  const detail = detailSelect.value;
+  const group = groupSelect.value;
+  const batchItems = clipCache.items.filter((item) => (!group || item.group === group) && item.detail === detail && !item.file.toLowerCase().endsWith("/skeleton.hkx"));
+  const choice = await askExportCategory(detail, batchItems.length);
+  if (choice === "batch") {
+    if (!detail || !batchItems.length) {
+      status.textContent = "这个细分类别没有可导出的动画";
+      return;
+    }
+    await exportCategoryBatch(model, batchItems, detail);
+    return;
+  }
+  if (choice === "one") await exportOne(model, anim);
+}
+
+function askExportCategory(detailLabel, count) {
+  const dialog = document.getElementById("exportCategory");
+  const text = document.getElementById("exportCategoryText");
+  const batch = dialog.querySelector('[value="batch"]');
+  if (!detailLabel) {
+    text.textContent = "还没有选择细分类别。请先选择例如突刺，再决定是否导出这一批。";
+    batch.hidden = true;
+  } else {
+    text.textContent = "是否导出当前模型的细分类别「" + detailLabel + "」动画，共 " + count + " 段？";
+    batch.hidden = false;
+  }
+  dialog.returnValue = "";
+  dialog.showModal();
+  return new Promise((resolve) => {
+    dialog.addEventListener("close", () => resolve(dialog.returnValue || "cancel"), { once: true });
+  });
+}
+
+async function exportOne(model, anim) {
+  status.textContent = "正在导出模型和动画…";
+  const weapon = (document.getElementById("weapon").value || "wp_a_0300");
+  const held = model.indexOf("c0000") >= 0 ? "&weapon=" + encodeURIComponent(weapon) : "";
+  const src = "/api/export?model=" + encodeURIComponent(model) + "&anim=" + encodeURIComponent(anim) + held;
+  const response = await fetch(src);
+  if (!response.ok) {
+    const detail = await response.text();
+    if (detail.includes("<!DOCTYPE") || detail.includes("Nothing matches the given")) {
+      status.textContent = "导出失败：当前预览是旧进程，没有导出接口。请关掉预览窗口后重新打开。";
+      return;
+    }
+    status.textContent = "导出失败 " + detail;
+    return;
+  }
+  const saved = await response.json();
+  status.textContent = "已导出 glTF " + saved.file;
+}
+
+async function exportCategoryBatch(model, items, detail) {
+  status.textContent = "正在导出细分类别「" + detail + "」，共 " + items.length + " 段…";
+  const weapon = document.getElementById("weapon").value || "wp_a_0300";
+  const response = await fetch("/api/export-category", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ model: model, weapon: weapon, detail: detail, anims: items.map((item) => item.file) }),
+  });
+  if (!response.ok) {
+    const detailText = await response.text();
+    if (detailText.includes("<!DOCTYPE") || detailText.includes("Nothing matches the given")) {
+      status.textContent = "导出失败：当前预览是旧进程，没有导出接口。请关掉预览窗口后重新打开。";
+      return;
+    }
+    status.textContent = "导出失败 " + detailText;
+    return;
+  }
+  const saved = await response.json();
+  status.textContent = "已导出 " + saved.animations + " 段动画: " + saved.file;
+}
+
 document.getElementById("play").addEventListener("click", play);
+document.getElementById("exportGlb").addEventListener("click", exportGlb);
 document.getElementById("weapon").addEventListener("change", () => {
   if (pageTab === "chr" && anims.value) play();
 });

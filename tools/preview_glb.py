@@ -195,9 +195,15 @@ def write_glb(bones, meshes, frames, path):
         if bone["parent"] < 0:
             roots.append(index + 1)
 
-    animations = ""
-    if frames:
-        times = frames["times"]
+    if isinstance(frames, list):
+        clips = frames
+    elif frames:
+        clips = [frames]
+    else:
+        clips = []
+    animation_docs = []
+    for clip_frames in clips:
+        times = clip_frames["times"]
         time_accessor = blob.accessor(
             blob.view(f32(times), 34962),
             len(times),
@@ -207,7 +213,7 @@ def write_glb(bones, meshes, frames, path):
         )
         samplers = []
         channels = []
-        for track in frames["tracks"]:
+        for track in clip_frames["tracks"]:
             node = track["bone"] + 1
             for path_name, values, kind, stride in (
                 ("translation", track["translation"], "VEC3", 3),
@@ -223,10 +229,17 @@ def write_glb(bones, meshes, frames, path):
                 sampler = len(samplers)
                 samplers.append(f'{{"input":{time_accessor},"output":{output},"interpolation":"LINEAR"}}')
                 channels.append(f'{{"sampler":{sampler},"target":{{"node":{node},"path":"{path_name}"}}}}')
-        animations = ',"animations":[{"name":"clip","samplers":[%s],"channels":[%s]}]' % (
-            ",".join(samplers),
-            ",".join(channels),
+        name = escape(clip_frames.get("name") or "clip")
+        animation_docs.append(
+            '{"name":"%s","samplers":[%s],"channels":[%s]}' % (
+                name,
+                ",".join(samplers),
+                ",".join(channels),
+            )
         )
+    animations = ""
+    if animation_docs:
+        animations = ',"animations":[%s]' % ",".join(animation_docs)
 
     blob.pad(4)
     view_json = ",".join(json.dumps(view, separators=(",", ":")) for view in blob.views)
@@ -249,5 +262,6 @@ def write_glb(bones, meshes, frames, path):
     out += struct.pack("<I", len(raw)) + b"JSON" + raw
     out += struct.pack("<I", len(blob.data)) + b"BIN\x00" + blob.data
     os.makedirs(os.path.dirname(path), exist_ok=True)
-    open(path, "wb").write(out)
+    with open(path, "wb") as handle:
+        handle.write(out)
     return position_min, position_max

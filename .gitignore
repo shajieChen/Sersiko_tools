@@ -1,6 +1,50 @@
-bin/
-obj/
+# Build output
+[Bb]in/
+[Oo]bj/
 __pycache__/
 *.pyc
+*.pyo
 *.user
+*.suo
+*.pdb
+.vs/
+
+# Machine-local paths
 config.json
+
+# glTF written by the preview export button
+output/*
+!output/.gitkeep
+
+# Caches, if a copy ever lands in this repo
+cache/
+preview/cache/
+
+# Extracted game resources belong in resourceDir, not in git
+*.glb
+*.gltf
+*.flver
+*.flv
+*.hkx
+*.dcx
+*.dds
+*.tpf
+*.tga
+*.bhd
+*.bhd5
+*.bdt
+*.bdt5
+*.bnd
+*.anibnd
+*.chrbnd
+*.partsbnd
+*.texbnd
+*.behbnd
+*.objbnd
+*.tae
+*.msb
+*.ffx
+*.fxr
+*.rig2
+*.compendium
+unpacked/

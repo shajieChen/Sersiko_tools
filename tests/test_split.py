@@ -16,7 +16,7 @@ RESOURCE_SUFFIXES = {".glb", ".flver", ".hkx", ".dds", ".dcx", ".tpf", ".bdt", "
 def resource_files(root):
     found = []
     for dirpath, dirs, files in os.walk(root):
-        dirs[:] = [name for name in dirs if name != ".git"]
+        dirs[:] = [name for name in dirs if name not in {".git", "output", "bin", "obj"}]
         for name in files:
             if os.path.splitext(name)[1].lower() in RESOURCE_SUFFIXES:
                 found.append(os.path.join(dirpath, name))
@@ -55,6 +55,9 @@ class SplitTests(unittest.TestCase):
         with open(os.path.join(TOOL, ".gitignore"), encoding="utf-8") as handle:
             ignore = handle.read()
         self.assertIn("config.json", ignore)
+        self.assertIn("output/*", ignore)
+        for suffix in ("*.glb", "*.gltf", "*.flver", "*.hkx", "*.dcx", "*.dds", "*.rig2"):
+            self.assertIn(suffix, ignore)
         with open(os.path.join(TOOL, "config.example.json"), encoding="utf-8") as handle:
             example = json.load(handle)
         self.assertEqual(set(example), {"gameDir", "resourceDir"})
@@ -79,10 +82,12 @@ class PreviewTests(unittest.TestCase):
         tool = function_dump(os.path.join(TOOL, "preview", "server.py"))
         self.assertIn("Handler.translate_path", tool)
         tool.pop("Handler.translate_path")
+        tool.pop("Handler.do_GET", None)
+        goal.pop("Handler.do_GET", None)
         self.assertEqual(sorted(goal), sorted(tool))
         for name in goal:
             self.assertEqual(goal[name], tool[name], name)
-        for name in ("index.html", "model-viewer.min.js"):
+        for name in ("model-viewer.min.js",):
             with open(os.path.join(GOAL, "preview", name), "rb") as handle:
                 goal_bytes = handle.read()
             with open(os.path.join(TOOL, "preview", name), "rb") as handle:
@@ -118,7 +123,7 @@ class PreviewTests(unittest.TestCase):
         cls.proc.wait(timeout=10)
 
     def test_live_lists_match_current_preview(self):
-        for path in ("/api/weapons", "/api/models?q=c1010", "/index.html"):
+        for path in ("/api/weapons", "/api/models?q=c1010"):
             current = urllib.request.urlopen("http://127.0.0.1:8765" + path, timeout=30).read()
             tool = urllib.request.urlopen("http://127.0.0.1:8766" + path, timeout=30).read()
             self.assertEqual(current, tool, path)

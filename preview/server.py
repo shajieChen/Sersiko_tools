@@ -26,8 +26,10 @@ PLAYER_PARTS = [
     os.path.join(UNPACKED, "parts", "wp_a_0300.partsbnd", "parts", "Weapon", "WP_A_0300", "WP_A_0300_1.flver"),
 ]
 sys.path.insert(0, TOOLS)
+sys.path.insert(0, os.path.join(TOOL, "gltf"))
 import havok_anim
 import preview_glb
+import export_clip
 
 os.makedirs(CACHE, exist_ok=True)
 
@@ -312,24 +314,10 @@ def visible_meshes(meshes):
     return kept or meshes
 
 
-def build_clip(model, anim_file, weapon="wp_a_0300"):
-    flver = safe_join(UNPACKED, os.path.splitext(model)[0] + ".flver")
-    hkx = safe_join(UNPACKED, anim_file)
-    if not os.path.isfile(flver) or not os.path.isfile(hkx):
-        raise FileNotFoundError("model or animation is missing")
-    char_id = character_id(model)
-    compendium = compendium_for_clip(hkx, char_id) if char_id else None
-    if not compendium:
-        raise FileNotFoundError("no animation set for this model")
-    player = os.path.basename(flver).lower() == "c0000.flver"
-    held = weapon if weapon_id_ok(weapon) else "wp_a_0300"
-    token = hashlib.sha1((flver + "|" + hkx + ("|orient6|" + held if player else "|body5")).encode("utf-8")).hexdigest()[:16]
-    target = os.path.join(CACHE, token + ".glb")
-    if os.path.exists(target) and os.path.getmtime(target) >= os.path.getmtime(hkx):
-        return target
-    bones, meshes = preview_glb.read_rig(ensure_player_rig(held) if player else ensure_rig(flver))
+def clip_frames(bones, hkx, compendium, name=None):
     types = havok_anim.load_compendium(compendium)
-    clip, mapping = havok_anim.animation_clip(havok_anim.HavokFile(types, open(hkx, "rb").read()).root)
+    with open(hkx, "rb") as handle:
+        clip, mapping = havok_anim.animation_clip(havok_anim.HavokFile(types, handle.read()).root)
     count = int(clip["numFrames"])
     duration = float(clip["duration"])
     times = [0.0 if count <= 1 else duration * i / (count - 1) for i in range(count)]
@@ -363,8 +351,71 @@ def build_clip(model, anim_file, weapon="wp_a_0300"):
             rotation.extend(moved_q)
             scale.extend(moved_s[:3])
         tracks.append({"bone": bone, "translation": translation, "rotation": rotation, "scale": scale})
-    preview_glb.write_glb(bones, visible_meshes(meshes), {"times": times, "tracks": tracks}, target)
+    frames = {"times": times, "tracks": tracks}
+    if name:
+        frames["name"] = name
+    return frames
+
+
+def build_clip(model, anim_file, weapon="wp_a_0300"):
+    flver = safe_join(UNPACKED, os.path.splitext(model)[0] + ".flver")
+    hkx = safe_join(UNPACKED, anim_file)
+    if not os.path.isfile(flver) or not os.path.isfile(hkx):
+        raise FileNotFoundError("model or animation is missing")
+    char_id = character_id(model)
+    compendium = compendium_for_clip(hkx, char_id) if char_id else None
+    if not compendium:
+        raise FileNotFoundError("no animation set for this model")
+    player = os.path.basename(flver).lower() == "c0000.flver"
+    held = weapon if weapon_id_ok(weapon) else "wp_a_0300"
+    token = hashlib.sha1((flver + "|" + hkx + ("|orient6|" + held if player else "|body5")).encode("utf-8")).hexdigest()[:16]
+    target = os.path.join(CACHE, token + ".glb")
+    if os.path.exists(target) and os.path.getmtime(target) >= os.path.getmtime(hkx):
+        return target
+    bones, meshes = preview_glb.read_rig(ensure_player_rig(held) if player else ensure_rig(flver))
+    frames = clip_frames(bones, hkx, compendium)
+    preview_glb.write_glb(bones, visible_meshes(meshes), frames, target)
     return target
+
+
+def export_detail(model, anim_files, weapon, detail):
+    label = (detail or "").strip()
+    if not label:
+        raise ValueError("detail category is missing")
+    files = [item for item in anim_files if item and not str(item).lower().endswith("/skeleton.hkx")]
+    if not files:
+        raise ValueError("detail category has no animations")
+    flver = safe_join(UNPACKED, os.path.splitext(model)[0] + ".flver")
+    if not os.path.isfile(flver):
+        raise FileNotFoundError("model or animation is missing")
+    char_id = character_id(model)
+    player = os.path.basename(flver).lower() == "c0000.flver"
+    held = weapon if weapon_id_ok(weapon) else "wp_a_0300"
+    resolved = []
+    for anim_file in files:
+        hkx = safe_join(UNPACKED, anim_file)
+        if not os.path.isfile(hkx):
+            raise FileNotFoundError("model or animation is missing")
+        resolved.append((anim_file, hkx))
+    stamp = [flver, str(int(os.path.getmtime(flver))), label, held if player else ""]
+    for _anim_file, hkx in resolved:
+        stamp.append(hkx + str(int(os.path.getmtime(hkx))))
+    token = hashlib.sha1("|".join(stamp).encode("utf-8")).hexdigest()[:16]
+    target = os.path.join(CACHE, "cat-" + token + ".glb")
+    fresh = os.path.exists(target) and os.path.getmtime(target) >= max(os.path.getmtime(hkx) for _anim_file, hkx in resolved)
+    if not fresh:
+        bones, meshes = preview_glb.read_rig(ensure_player_rig(held) if player else ensure_rig(flver))
+        meshes = visible_meshes(meshes)
+        clips = []
+        for anim_file, hkx in resolved:
+            compendium = compendium_for_clip(hkx, char_id) if char_id else None
+            if not compendium:
+                raise FileNotFoundError("no animation set for this model")
+            clips.append(clip_frames(bones, hkx, compendium, os.path.splitext(os.path.basename(anim_file))[0]))
+        preview_glb.write_glb(bones, meshes, clips, target)
+    filename = export_clip.category_filename(model, label, held if player else "")
+    return export_clip.publish_as(target, TOOL, filename)
+
 
 class Handler(SimpleHTTPRequestHandler):
     def end_headers(self):
@@ -380,6 +431,34 @@ class Handler(SimpleHTTPRequestHandler):
             return os.path.join(APP, rel)
         return safe_join(PREVIEW, rel)
 
+    def do_POST(self):
+        parsed = urlparse(self.path)
+        if parsed.path != "/api/export-category":
+            data = "预览服务没有这个接口".encode("utf-8")
+            self.send_response(404)
+            self.send_header("Content-Type", "text/plain; charset=utf-8")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+            return
+        try:
+            length = int(self.headers.get("Content-Length", "0") or "0")
+            payload = json.loads(self.rfile.read(length).decode("utf-8"))
+            model = payload.get("model") or ""
+            anims = payload.get("anims") or []
+            weapon = payload.get("weapon") or "wp_a_0300"
+            detail = payload.get("detail") or ""
+            dest = export_detail(model, anims, weapon, detail)
+        except Exception as exc:
+            data = str(exc).encode("utf-8")
+            self.send_response(400)
+            self.send_header("Content-Type", "text/plain; charset=utf-8")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+            return
+        return self._json({"file": dest, "name": os.path.basename(dest), "animations": len(anims)})
+
     def do_GET(self):
         parsed = urlparse(self.path)
         if parsed.path == "/api/models":
@@ -392,6 +471,24 @@ class Handler(SimpleHTTPRequestHandler):
             return self._json(animation_list(char_id, query) if char_id else [])
         if parsed.path == "/api/weapons":
             return self._json(weapon_choices())
+        if parsed.path == "/api/export":
+            args = parse_qs(parsed.query)
+            model = args.get("model", [""])[0]
+            anim = args.get("anim", [""])[0]
+            weapon = args.get("weapon", ["wp_a_0300"])[0]
+            held = weapon if "c0000" in model.replace("\\", "/") else ""
+            try:
+                built = build_clip(model, anim, weapon)
+                dest = export_clip.publish(built, TOOL, model, anim, held)
+            except Exception as exc:
+                data = str(exc).encode("utf-8")
+                self.send_response(400)
+                self.send_header("Content-Type", "text/plain; charset=utf-8")
+                self.send_header("Content-Length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+                return
+            return self._json({"file": dest, "name": os.path.basename(dest)})
         if parsed.path == "/api/clip.glb":
             args = parse_qs(parsed.query)
             try:
