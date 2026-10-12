@@ -230,7 +230,7 @@ def animation_list(char_id, query):
 def ensure_player_rig(weapon="wp_a_0300"):
     player = os.path.join(UNPACKED, "chr", "c0000.chrbnd", "chr", "c0000", "c0000.flver")
     paths = [player] + player_parts(weapon)
-    stamp = "|".join(path + str(int(os.path.getmtime(path))) for path in paths) + "|orient3|" + weapon
+    stamp = "|".join(path + str(int(os.path.getmtime(path))) for path in paths) + "|orient6|" + weapon
     rig = os.path.join(CACHE, hashlib.sha1(stamp.encode("utf-8")).hexdigest()[:16] + ".rig2")
     if not os.path.exists(rig):
         subprocess.run([ASSEMBLE, rig] + paths, check=True)
@@ -323,7 +323,7 @@ def build_clip(model, anim_file, weapon="wp_a_0300"):
         raise FileNotFoundError("no animation set for this model")
     player = os.path.basename(flver).lower() == "c0000.flver"
     held = weapon if weapon_id_ok(weapon) else "wp_a_0300"
-    token = hashlib.sha1((flver + "|" + hkx + ("|orient3|" + held if player else "|body5")).encode("utf-8")).hexdigest()[:16]
+    token = hashlib.sha1((flver + "|" + hkx + ("|orient6|" + held if player else "|body5")).encode("utf-8")).hexdigest()[:16]
     target = os.path.join(CACHE, token + ".glb")
     if os.path.exists(target) and os.path.getmtime(target) >= os.path.getmtime(hkx):
         return target

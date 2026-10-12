@@ -93,8 +93,16 @@ static bool TryInvert(Matrix4x4 matrix, out Matrix4x4 inverse) => Matrix4x4.Inve
     else if (sheathRoot >= 0 && nameIndex.ContainsKey("Sheath"))
     {
         var dummy = player.Dummies.FirstOrDefault(item => item.ReferenceID == 147 && item.AttachBoneIndex >= 0 && item.AttachBoneIndex < playerNames.Count && playerNames[item.AttachBoneIndex] == "Sheath");
-        if (dummy != null && nameIndex.TryGetValue("Sheath", out var parent))
-            return (parent, Matrix4x4.CreateTranslation(dummy.Position), "Sheath");
+        if (dummy != null && nameIndex.TryGetValue("Sheath", out var parent) && TryInvert(Frame(Vector3.Zero, -Vector3.UnitZ, Vector3.UnitY), out var inverseSheath))
+        {
+            var world = inverseSheath * Frame(dummy.Position, dummy.Forward, dummy.Upward);
+            var mouth = Vector3.Transform(Vector3.Zero, world);
+            var tip = Vector3.Transform(-Vector3.UnitY, world);
+            var aimed = Vector3.Normalize(tip - mouth);
+            var fromDown = MathF.Acos(Math.Clamp(Vector3.Dot(aimed, -Vector3.UnitY), -1f, 1f)) * 180f / MathF.PI;
+            Console.WriteLine($"orient 147 Sheath fromDown {fromDown:0.0} mouth {mouth.X:0.###},{mouth.Y:0.###},{mouth.Z:0.###} tip {aimed.X:0.###},{aimed.Y:0.###},{aimed.Z:0.###}");
+            return (parent, world, "Sheath");
+        }
     }
     else if (file.Contains("/wp_a_") && nameIndex.ContainsKey(handName))
     {
