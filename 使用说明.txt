@@ -1,0 +1,18 @@
+只狼预览和抽取工具
+
+这个目录只有程序，不放模型、贴图和动画。
+资源放在 config.json 的 resourceDir。当前默认是 H:\SErsiko_Goal。
+游戏安装目录是 gameDir。
+
+SetGameDir.bat
+  修改游戏目录和资源目录。两个路径都写进 config.json。
+
+Preview.bat
+  打开预览。页面在本目录，模型读资源目录里的 preview，动画读 unpacked。
+
+Extract.bat
+  从游戏目录抽取 Data2、Data3、Data4 到资源目录。
+  已经存在的文件会跳过。地图包 Data5 不抽取。
+
+需要本机已安装 Python 和 .NET 10。
+第一次预览时，如果 RigDump 或 Assemble 还没编译，会自动编译。

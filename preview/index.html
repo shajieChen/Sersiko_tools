@@ -1,0 +1,339 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="utf-8">
+<title>只狼模型与动画预览</title>
+<script type="module" src="model-viewer.min.js"></script>
+<style>
+body { margin: 0; font-family: "Segoe UI", sans-serif; background: #161412; color: #f2efe8; }
+header { display: flex; gap: 12px; align-items: end; padding: 12px 16px; flex-wrap: wrap; }
+label { display: flex; flex-direction: column; gap: 4px; font-size: 13px; }
+input, select, button { background: #2a2622; color: #f2efe8; border: 1px solid #5c5348; border-radius: 4px; padding: 6px 8px; }
+select { min-width: 280px; }
+#group, #detail { min-width: 150px; }
+#status { padding: 0 16px 8px; color: #d9c7a2; min-height: 1.2em; }
+body { height: 100vh; display: flex; flex-direction: column; }
+model-viewer { width: 100%; flex: 1; min-height: 280px; background: #1c1a17; }
+
+#tabs { display: flex; gap: 8px; padding: 12px 16px 0; }
+#tabs button { min-width: 88px; cursor: pointer; }
+#tabs button.on { background: #8c6a3a; border-color: #d9c7a2; }
+.hidden { display: none !important; }
+</style>
+</head>
+<body>
+<nav id="tabs">
+  <button type="button" id="tabChr" class="on">角色</button>
+  <button type="button" id="tabItem">道具</button>
+</nav>
+<header>
+  <label>模型<input id="modelQuery" placeholder="留空列出角色，搜索 c0000 看主角，或搜索 parts"></label>
+  <label>选择模型<select id="models" size="8"></select></label>
+  <label class="chr-only">道具<select id="weapon"></select></label>
+  <label class="item-only hidden">档次<select id="itemTier"><option value="std">标准</option><option value="lod">低模</option><option value="menu">菜单</option></select></label>
+  <label class="chr-only">分组<select id="group"></select></label>
+  <label class="chr-only">细分<select id="detail"></select></label>
+  <label class="chr-only">动画<input id="animQuery" placeholder="过滤动作名"></label>
+  <label class="chr-only">选择动画<select id="anims" size="8"></select></label>
+  <button id="play" type="button" class="chr-only">播放</button>
+</header>
+<div id="status"></div>
+<model-viewer id="view" camera-controls autoplay animation-name="clip" exposure="1.15" shadow-intensity="0.4"></model-viewer>
+<script>
+const status = document.getElementById("status");
+const models = document.getElementById("models");
+const anims = document.getElementById("anims");
+const groupSelect = document.getElementById("group");
+const detailSelect = document.getElementById("detail");
+const view = document.getElementById("view");
+const GROUP_ORDER = ["走跑", "攻击", "受击", "跳跃", "格挡", "义手", "战技", "忍杀", "钩锁", "闪避", "攀爬", "游泳", "贴墙", "翻滚", "待机", "道具", "表情", "其他"];
+let clipCache = { model: "", items: [] };
+
+function clipGroup(name) {
+  const split = name.split("_");
+  const head = split[0];
+  const num = Number(split[1]);
+  if (!Number.isFinite(num)) return "其他";
+  if (head === "a000") {
+    if (num <= 41442) return "走跑";
+    if (num >= 100000 && num <= 200909) return "受击";
+    if (num >= 201000 && num <= 201987) return "跳跃";
+    if (num >= 202000 && num <= 202710) return "钩锁";
+    if (num >= 205010 && num <= 205031) return "贴墙";
+    if (num >= 206100 && num <= 206123) return "翻滚";
+    if (num >= 213300 && num <= 213304) return "闪避";
+    if (num >= 217100 && num <= 217720) return "攀爬";
+    if ((num >= 210000 && num <= 210161) || (num >= 218103 && num <= 218491)) return "游泳";
+    if ((num >= 700000 && num <= 700110) || (num >= 700400 && num <= 700423)) return "待机";
+    if ((num >= 250000 && num <= 259461) || (num >= 711500 && num <= 711610)) return "道具";
+    if (num >= 790000 && num <= 790520) return "表情";
+    return "其他";
+  }
+  if (head === "a010") {
+    if (num <= 500) return "走跑";
+    if (num >= 250500 && num <= 251710) return "道具";
+    return "其他";
+  }
+  if (head === "a050") return num < 10000 ? "格挡" : "攻击";
+  if (/^a07\d$/.test(head)) return "义手";
+  if (/^a1(0\d|10)$/.test(head)) return "战技";
+  if (/^a2\d\d$/.test(head)) return "忍杀";
+  return "其他";
+}
+
+
+const ATTACK_COMBO = [300020, 300030, 300040, 300100, 300101, 300110, 300111, 301100, 305100, 305101];
+const ATTACK_THRUST = [300000, 300001, 300010, 300011, 301000, 301050, 302010, 302011, 305000, 305001];
+const ATTACK_PARRY = [304011, 304012, 304021, 304022];
+const ATTACK_STEP = [304121, 304122];
+const ATTACK_AIR = [308000, 308010, 308020, 308050, 308060, 308070];
+const ATTACK_LIGHTNING = [308900, 308901, 308910, 308911];
+const ATTACK_HOOK = [309000, 309050];
+const TOOL_NAME = {"a070":"手里剑","a071":"爆竹","a072":"火焰筒","a073":"斧","a074":"雾鸦","a075":"忍刀","a076":"铁伞","a077":"神扇","a078":"枪","a079":"指笛"};
+const ART_NAME = {"a100":"旋风斩","a101":"夜叉斩","a102":"一文字","a103":"龙闪","a104":"苇名十字","a105":"浮舟渡","a106":"不死斩","a107":"仙峰脚","a108":"祈祷打击","a109":"影袭","a110":"樱花舞"};
+const KILL_NAME = {"a200":"普通敌人","a201":"大型敌人","a202":"小型敌人","a210":"被击杀","a211":"变若","a212":"巨蛇","a213":"锁鬼","a214":"蛇眼","a215":"百足","a216":"孤影","a217":"岩泳","a218":"对空","a219":"不死僧","a220":"僧侣捕捉","a221":"枭","a222":"翁","a223":"水生村","a224":"蛇眼枪击","a225":"鬼形部","a226":"不死僧","a227":"弦一郎","a228":"弦一郎巴流","a229":"酒吞","a230":"狮子猿","a231":"古龙","a233":"神龙","a235":"无头狮子猿","a236":"形代","a237":"小个子","a238":"火牛","a239":"百足感染","a240":"怨恨","a241":"将军","a242":"苇名一心","a243":"剑圣一心","a244":"蝴蝶夫人","a245":"死亡","a246":"艾玛","a247":"铠甲武士","a250":"死亡"};
+const DETAIL_ORDER = ["地面连击","突刺","弹反追击","垫步奔跑","空中攻击","雷返","钩锁追击","水中攻击","未命名攻击","手里剑","爆竹","火焰筒","斧","雾鸦","忍刀","铁伞","神扇","枪","指笛","旋风斩","夜叉斩","一文字","龙闪","苇名十字","浮舟渡","不死斩","仙峰脚","祈祷打击","影袭","樱花舞"];
+
+function clipDetail(name, group) {
+  const split = name.split("_");
+  const head = split[0];
+  const num = Number(split[1]);
+  if (group === "攻击") {
+    if (ATTACK_COMBO.includes(num)) return "地面连击";
+    if (ATTACK_THRUST.includes(num)) return "突刺";
+    if (ATTACK_PARRY.includes(num)) return "弹反追击";
+    if (ATTACK_STEP.includes(num)) return "垫步奔跑";
+    if (ATTACK_AIR.includes(num)) return "空中攻击";
+    if (ATTACK_LIGHTNING.includes(num)) return "雷返";
+    if (ATTACK_HOOK.includes(num)) return "钩锁追击";
+    if (num >= 310000 && num <= 311201) return "水中攻击";
+    return "未命名攻击";
+  }
+  if (group === "义手") return TOOL_NAME[head] || head;
+  if (group === "战技") return ART_NAME[head] || head;
+  if (group === "忍杀") return KILL_NAME[head] || head;
+  return "";
+}
+
+function fillDetails() {
+  const group = groupSelect.value;
+  const counts = {};
+  let inGroup = 0;
+  for (const item of clipCache.items) {
+    if (group && item.group !== group) continue;
+    inGroup++;
+    if (item.detail) counts[item.detail] = (counts[item.detail] || 0) + 1;
+  }
+  const previous = detailSelect.value;
+  detailSelect.innerHTML = "";
+  const add = (value, label) => {
+    const option = document.createElement("option");
+    option.value = value;
+    option.textContent = label;
+    detailSelect.appendChild(option);
+  };
+  add("", "全部 " + inGroup);
+  const ordered = DETAIL_ORDER.filter((name) => counts[name]);
+  const extra = Object.keys(counts).filter((name) => !DETAIL_ORDER.includes(name)).sort();
+  for (const name of ordered.concat(extra)) add(name, name + " " + counts[name]);
+  if ([...detailSelect.options].some((option) => option.value === previous)) detailSelect.value = previous;
+  else detailSelect.value = "";
+}
+
+function fillGroups() {
+  const counts = {};
+  for (const item of clipCache.items) {
+    item.group = clipGroup(item.name);
+    item.detail = clipDetail(item.name, item.group);
+    counts[item.group] = (counts[item.group] || 0) + 1;
+  }
+  const previous = groupSelect.value;
+  groupSelect.innerHTML = "";
+  const add = (value, label) => {
+    const option = document.createElement("option");
+    option.value = value;
+    option.textContent = label;
+    groupSelect.appendChild(option);
+  };
+  add("", "全部" + " " + clipCache.items.length);
+  for (const name of GROUP_ORDER) {
+    if (counts[name]) add(name, name + " " + counts[name]);
+  }
+  if ([...groupSelect.options].some((option) => option.value === previous)) groupSelect.value = previous;
+}
+
+function renderAnims() {
+  const query = document.getElementById("animQuery").value.trim().toLowerCase();
+  const group = groupSelect.value;
+  const detail = detailSelect.value;
+  const list = clipCache.items.filter((item) => (!group || item.group === group) && (!detail || item.detail === detail) && (!query || item.name.toLowerCase().includes(query)));
+  const previous = anims.value;
+  anims.innerHTML = "";
+  for (const item of list) {
+    const option = document.createElement("option");
+    option.value = item.file;
+    option.textContent = item.name;
+    anims.appendChild(option);
+  }
+  if (previous && [...anims.options].some((option) => option.value === previous)) anims.value = previous;
+  else if (anims.options.length) anims.selectedIndex = 0;
+  const modelName = models.selectedOptions[0] ? models.selectedOptions[0].textContent : "";
+  status.textContent = list.length ? modelName + " · " + (group || "全部") + (detail ? " / " + detail : "") + " " + list.length + " 段，点播放" : "这个分组没有匹配的动作";
+}
+
+let pageTab = "chr";
+let modelRows = [];
+let modelRequest = 0;
+const tierLabels = { std: "\u6807\u51c6", lod: "\u4f4e\u6a21", menu: "\u83dc\u5355" };
+
+function setTab(tab) {
+  pageTab = tab;
+  document.getElementById("tabChr").classList.toggle("on", tab === "chr");
+  document.getElementById("tabItem").classList.toggle("on", tab === "item");
+  document.querySelectorAll(".chr-only").forEach((el) => el.classList.toggle("hidden", tab !== "chr"));
+  document.querySelectorAll(".item-only").forEach((el) => el.classList.toggle("hidden", tab !== "item"));
+  document.getElementById("modelQuery").placeholder = tab === "item"
+    ? "\u641c\u7d22\u6954\u4e38\u3001\u624b\u91cc\u5251\u3001wp_a_0300"
+    : "\u7559\u7a7a\u5217\u51fa\u89d2\u8272\uff0c\u641c\u7d22 c0000 \u770b\u4e3b\u89d2\uff0c\u6216\u641c\u7d22 parts";
+  loadModels();
+}
+
+function fillTiers() {
+  const counts = { std: 0, lod: 0, menu: 0 };
+  for (const item of modelRows) counts[item.tier] = (counts[item.tier] || 0) + 1;
+  for (const option of document.getElementById("itemTier").options) {
+    option.textContent = tierLabels[option.value] + " " + (counts[option.value] || 0);
+  }
+}
+
+function showItem() {
+  const file = models.value;
+  if (!file) {
+    status.textContent = "\u6ca1\u6709\u5339\u914d\u7684\u9053\u5177";
+    return;
+  }
+  if (view.objectUrl) {
+    URL.revokeObjectURL(view.objectUrl);
+    view.objectUrl = "";
+  }
+  view.src = file;
+  status.textContent = "\u9053\u5177 " + models.selectedOptions[0].textContent;
+}
+
+function renderModelOptions() {
+  const tier = document.getElementById("itemTier").value;
+  const list = pageTab === "item" ? modelRows.filter((item) => item.tier === tier) : modelRows;
+  const previous = models.value;
+  models.innerHTML = "";
+  for (const item of list) {
+    const option = document.createElement("option");
+    option.value = item.file;
+    option.textContent = item.name;
+    models.appendChild(option);
+  }
+  if (previous && [...models.options].some((option) => option.value === previous)) models.value = previous;
+  else if (models.options.length) models.selectedIndex = 0;
+  if (pageTab === "item") {
+    if (list.length) showItem();
+    else status.textContent = "\u6ca1\u6709\u5339\u914d\u7684\u9053\u5177";
+    return;
+  }
+  if (list.length) loadAnims();
+  else status.textContent = "\u6ca1\u6709\u5339\u914d\u7684\u6a21\u578b";
+}
+
+async function loadModels() {
+  const request = ++modelRequest;
+  const tab = pageTab;
+  const q = document.getElementById("modelQuery").value.trim();
+  const kind = tab === "item" ? "&kind=item" : "";
+  const rows = await (await fetch("/api/models?q=" + encodeURIComponent(q) + kind)).json();
+  if (request !== modelRequest || tab !== pageTab) return;
+  modelRows = rows;
+  if (pageTab === "item") fillTiers();
+  renderModelOptions();
+}
+
+async function loadAnims() {
+  const model = models.value;
+  if (!model) return;
+  if (clipCache.model !== model) {
+    const list = await (await fetch("/api/anims?model=" + encodeURIComponent(model) + "&q=")).json();
+    clipCache = { model, items: list };
+    fillGroups();
+  }
+  fillDetails();
+  renderAnims();
+}
+
+async function play() {
+  const model = models.value;
+  const anim = anims.value;
+  if (!model || !anim) return;
+  if (anim.toLowerCase().endsWith("/skeleton.hkx")) {
+    status.textContent = "skeleton 是绑定骨骼，不是动作";
+    return;
+  }
+  status.textContent = "正在生成可播放的模型，第一次会稍久…";
+  const weapon = (document.getElementById("weapon").value || "wp_a_0300");
+  const held = model.indexOf("c0000") >= 0 ? "&weapon=" + encodeURIComponent(weapon) : "";
+  const src = "/api/clip.glb?model=" + encodeURIComponent(model) + "&anim=" + encodeURIComponent(anim) + held;
+  const response = await fetch(src);
+  if (!response.ok) {
+    status.textContent = "播放失败" + (await response.text());
+    return;
+  }
+  if (view.objectUrl) URL.revokeObjectURL(view.objectUrl);
+  view.objectUrl = URL.createObjectURL(await response.blob());
+  view.src = view.objectUrl;
+  try {
+    await view.updateComplete;
+    for (let i = 0; i < 40 && !view.loaded; i++) await new Promise((resolve) => setTimeout(resolve, 100));
+    view.animationName = "clip";
+    view.currentTime = 0;
+    view.play();
+    status.textContent = "正在播放 " + anims.selectedOptions[0].textContent;
+  } catch (error) {
+    status.textContent = "播放失败";
+  }
+}
+
+document.getElementById("modelQuery").addEventListener("input", loadModels);
+models.addEventListener("change", () => {
+  if (pageTab === "item") showItem();
+  else loadAnims();
+});
+document.getElementById("tabChr").addEventListener("click", () => setTab("chr"));
+document.getElementById("tabItem").addEventListener("click", () => setTab("item"));
+document.getElementById("itemTier").addEventListener("change", renderModelOptions);
+function onGroupChange() {
+  detailSelect.value = "";
+  fillDetails();
+  renderAnims();
+}
+groupSelect.addEventListener("change", onGroupChange);
+detailSelect.addEventListener("change", renderAnims);
+document.getElementById("animQuery").addEventListener("input", renderAnims);
+document.getElementById("play").addEventListener("click", play);
+document.getElementById("weapon").addEventListener("change", () => {
+  if (pageTab === "chr" && anims.value) play();
+});
+async function loadWeapons() {
+  const list = await (await fetch("/api/weapons")).json();
+  const select = document.getElementById("weapon");
+  const previous = select.value;
+  select.innerHTML = "";
+  for (const item of list) {
+    const option = document.createElement("option");
+    option.value = item.id;
+    option.textContent = item.name;
+    select.appendChild(option);
+  }
+  if (previous && [...select.options].some((option) => option.value === previous)) select.value = previous;
+  else if ([...select.options].some((option) => option.value === "wp_a_0300")) select.value = "wp_a_0300";
+}
+loadWeapons();
+loadModels();
+</script>
+</body>
+</html>
