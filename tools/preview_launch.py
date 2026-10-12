@@ -5,18 +5,18 @@ SERVER = os.path.join(TOOL, "preview", "server.py")
 sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
 
-def listener_pid():
-    out = subprocess.check_output(["netstat", "-ano"], text=True, errors="replace")
-    for line in out.splitlines():
-        if ":8765" in line and "LISTENING" in line:
-            return int(line.split()[-1])
+def first_free_port(start, count=20):
+    for port in range(start, start + count):
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        try:
+            sock.bind(("127.0.0.1", port))
+        except OSError:
+            continue
+        else:
+            return port
+        finally:
+            sock.close()
     return None
-
-
-def command_line(pid):
-    script = "(Get-CimInstance Win32_Process -Filter 'ProcessId=%d').CommandLine" % pid
-    out = subprocess.check_output(["powershell", "-NoProfile", "-Command", script], text=True, errors="replace")
-    return out.strip()
 
 
 def ensure_built():
@@ -32,29 +32,30 @@ def ensure_built():
 
 
 def main():
-    pid = listener_pid()
-    if pid:
-        command = command_line(pid)
-        if os.path.normcase(SERVER) in os.path.normcase(command):
-            os.startfile("http://127.0.0.1:8765/index.html")
-            print("预览已在运行。")
-            return 0
-        print("8765 端口已被其他程序占用。请先关掉原来的预览，再运行 Preview.bat。")
-        print(command)
+    port = first_free_port(8765)
+    if port is None:
+        print("从 8765 开始的端口都已被占用。")
         return 1
     ensure_built()
-    subprocess.Popen([sys.executable, SERVER], cwd=TOOL, creationflags=subprocess.CREATE_NEW_CONSOLE)
+    subprocess.Popen(
+        [sys.executable, SERVER, str(port)],
+        cwd=TOOL,
+        creationflags=subprocess.CREATE_NEW_CONSOLE,
+    )
     for _ in range(50):
         try:
-            with socket.create_connection(("127.0.0.1", 8765), 0.2):
+            with socket.create_connection(("127.0.0.1", port), 0.2):
                 break
         except OSError:
             time.sleep(0.2)
     else:
         print("预览没有启动。")
         return 1
-    os.startfile("http://127.0.0.1:8765/index.html")
-    print("预览已打开。")
+    os.startfile("http://127.0.0.1:%d/index.html" % port)
+    if port == 8765:
+        print("预览已打开。")
+    else:
+        print("8765 已被占用，预览改用 %d。" % port)
     return 0
 
 
